@@ -1,0 +1,166 @@
+---
+title: "Data Analysis_1"
+author: "Emmanuel."
+date: "07/11/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load libraries
+```{r}
+library(tidyverse)
+```
+
+
+##Importing Data
+
+```{r}
+library(readxl)
+Regen_data <- read_excel("C:/Users/adoasi94/Desktop/Regen_data_NewBackUp.xlsx", sheet = "REGEN")
+View(Regen_data_NewBackUp)
+head(Regen_data_NewBackUp)
+```
+
+```{r}
+Regen_data_NewBackUp <- Regen_data_NewBackUp %>% 
+  rename(plot = Gap_No) %>% 
+  separate(plot, c("Gap", "Plot"))
+```
+
+
+
+```{r}
+Salvage_regen_summary_plots <- Regen_data_NewBackUp %>% 
+  filter(Gap_type == "S") %>% 
+  group_by(Gap, Plot, Spp) %>% 
+  summarise(count = n()) %>%
+  mutate(TPH = ifelse(Spp == "0", 0, count * 1000)) 
+view(Salvage_regen_summary_plots)
+  
+
+length(unique(Salvage_regen_summary_plots$Gap))
+length(unique(Salvage_regen_summary_plots$Plot))
+length(unique(Regen_data_NewBackUp$Plot))
+length(unique(Regen_data_NewBackUp$Gap))
+plot_test <- unique(Regen_data_NewBackUp)
+View(Regen_data_NewBackUp)
+plot_test <- unique(Regen_data_NewBackUp)
+plot_test <- sort(unique(Regen_data_NewBackUp$Plot))
+plot_test <- as.data.frame(as.numeric(sort(unique(Regen_data_NewBackUp$Plot))))
+View(plot_test)
+plot_test <- as.data.frame(plot =as.numeric(sort(unique(Regen_data_NewBackUp$Plot))))
+plot_test <- as.data.frame(as.numeric(sort(unique(Regen_data_NewBackUp$Plot))))
+View(plot_test)
+plot_test <- plot_test %>% rename(plot = `as.numeric(sort(unique(Regen_data_NewBackUp$Plot)))`)
+plot_test <- plot_test %>% arrange(plot)
+plot_test$row_id <- rownames(plot_test$plot)
+View(plot_test)
+plot_test <- plot_test %>%  rownames_to_column("rowname")
+plot_test <- plot_test %>% mutate(test = ifelse(plot == rowname, "Good", "Bad"))
+```
+```{r}
+view(Salvage_regen_summary_plots)
+SMeanSpecies <- Salvage_regen_summary_plots %>%
+  group_by(Gap,Spp) %>% 
+  summarise(mean_gap=mean(TPH))
+View(SMeanSpecies)
+```
+
+
+Generating a table for the results
+```{r}
+Salvage_regen_summary_plots %>%
+  group_by(Gap,Spp) %>% 
+  summarise(mean_gap=mean(TPH)) %>% 
+  mutate(mean_gap) %>% 
+  
+```
+
+Determining number of species per hectare per plots 
+
+```{r}
+Natural_regen_summary_plots <- Regen_data_NewBackUp %>% 
+  filter(Gap_type == "N") %>% 
+  group_by(Gap, Plot, Spp) %>% 
+  summarise(count = n()) %>%
+  mutate(TPHN = ifelse(Spp == "0", 0, count * 1000)) 
+view(Natural_regen_summary_plots)
+```
+
+Summary of Species per hectare per Natural gap 
+```{r}
+view(Natural_regen_summary_plots)
+NMeanSpecies <- Natural_regen_summary_plots %>%
+  group_by(Gap,Spp) %>% 
+  summarise(mean_gap=mean(TPHN))
+View(NMeanSpecies)
+```
+
+Total number of species per Salvage gap 
+
+```{r}
+view(Salvage_regen_summary_plots)
+SMeanSpeciesTotal <- Salvage_regen_summary_plots %>%
+  group_by(Gap) %>% 
+  summarise(mean_gap1=mean(TPH))
+```
+
+Total number of species per Natural gap
+```{r}
+NMeanSpeciesTotal <- Natural_regen_summary_plots %>%
+  group_by(Gap) %>% 
+  summarise(mean_gap2=mean(TPHN))
+```
+Mean of salvage species per plot to match LAI 4R data
+
+```{r}
+view(Salvage_regen_summary_plots)
+STotalSpeciesPlot <- Salvage_regen_summary_plots %>%
+  group_by(Gap, Plot) %>% 
+  summarise(mean_plot=mean(TPH)) 
+```
+
+Group LAI to match up Salvage regeneration data
+Using PASG
+```{r}
+Regen_data_NewBackUp <- Regen_data_NewBackUp %>% 
+  rename(plot = Gap_No) %>% 
+  separate(plot, c("Gap", "Plot"))
+
+SalvageLAI4 <- Regen_data_NewBackUp %>% 
+  filter(Gap_type== "S") %>% 
+  group_by(Gap, Plot, `LAI 4Ring`) %>% 
+  summarise(count = n())
+```
+
+Salvage Scatter plots: Plotting scatterplot for number of trees per plot and LAI 4R per plot 
+```{r}
+SalvScatter4R <- SalvageLAI4 %>%  STotalSpeciesPlot %>%
+PlotScatter4R <- plot(SalvageLAI4$`LAI 4Ring` ~ STotalSpeciesPlot$mean_plot)
+```
+
+Mean of natural species per plot to match LAI 4R data
+
+```{r}
+NTotalSpeciesPlot <- Natural_regen_summary_plots  %>%
+  group_by(Gap, Plot) %>% 
+  summarise(mean_plot=mean(TPHN)) 
+View(NTotalSpeciesPlot)
+```
+Group LAI to match up natural regeneration data
+```{r}
+NaturalLAI4 <- Regen_data_NewBackUp %>% 
+  filter(Gap_type== "N") %>% 
+  group_by(Gap, Plot, `LAI 4Ring`) %>% 
+  summarise(count = n())
+```
+
+Natural Scatter plots: Plotting scatterplot for number of trees per plot and LAI 4R per plot
+```{r}
+NatScatter4R <- NaturalLAI4 %>%  NTotalSpeciesPlot %>%
+PlotNatScatter4R <- plot(NaturalLAI4$`LAI 4Ring` ~ NTotalSpeciesPlot$'mean_plot')
+```
+
