@@ -1,0 +1,2552 @@
+---
+title: "Data_exploration"
+author: "Emmanuel"
+date: "November 22, 2019"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the libraries
+
+```{r}
+library(tidyverse)
+library(openxlsx)
+library(circular)
+library(car)
+```
+
+
+## Read the data
+
+Write a clean names function
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+  n <- if (is.data.frame(.data)) colnames(.data) else .data
+
+  n <- gsub("%+", "_pct_", n)
+  n <- gsub("\\$+", "_dollars_", n)
+  n <- gsub("\\++", "_plus_", n)
+  n <- gsub("-+", "_minus_", n)
+  n <- gsub("\\*+", "_star_", n)
+  n <- gsub("#+", "_cnt_", n)
+  n <- gsub("&+", "_and_", n)
+  n <- gsub("@+", "_at_", n)
+
+  n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+  n <- gsub("([A-Z][a-z])", "_\\1", n)
+  n <- tolower(trimws(n))
+  
+  n <- gsub("(^_+|_+$)", "", n)
+  
+  n <- gsub("_+", "_", n)
+  
+  if (unique) n <- make.unique(n, sep = "_")
+  
+  if (is.data.frame(.data)) {
+    colnames(.data) <- n
+    .data
+  } else {
+    n
+  }
+}
+```
+
+
+```{r}
+regen_data <- read_csv("regen_data.csv") %>% 
+  clean_names() %>% 
+  separate(gap_no, c("gap","plot")) 
+```
+
+##Prep the data
+
+Pull out 0 plots
+
+```{r}
+zero_plots <- regen_data %>% 
+  filter(spp == "0")
+
+```
+
+
+Now find germinates
+```{r}
+regen_data <- regen_data %>% 
+  mutate(germ_id = ifelse(height == growth, "germinate", "older")) 
+
+
+germinate_id <- regen_data %>% 
+  filter(germ_id == "germinate")
+
+```
+
+Now we need to find plots with only germinates. First, I will create a dataframe with plots that have germinates.
+```{r}
+plots_with_germinates <- regen_data %>% filter(plot %in% germinate_id$plot)
+
+```
+
+Now find plots with older trees as well as germinates
+```{r}
+plots_with_germinates_older <- plots_with_germinates %>% filter(germ_id == "older")
+
+```
+
+and remove those plots from the plots with germinates dataframe
+```{r}
+plots_with_germinates_no_old <- plots_with_germinates %>% filter(!plot %in% plots_with_germinates_older$plot)
+```
+
+Now we have a dataframe with plots with only germinates. There are several At in the plots that have NA values. We won't worry about them for now.
+
+```{r}
+plots_with_germinates_no_old <- plots_with_germinates_no_old %>% 
+  mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+  mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+  select(-germ_id) %>% 
+  distinct()
+```
+
+
+Now combine the zero plots in
+```{r}
+zero_plots2<- bind_rows(zero_plots, plots_with_germinates_no_old)
+```
+
+Now let's find advanced regeneration
+```{r}
+advanced_regen <- regen_data %>% 
+  filter(regn_type != "N")
+
+advanced_regen2 <- regen_data %>% 
+  filter(plot %in% advanced_regen$plot)
+
+advanced_regen3 <- advanced_regen2 %>% 
+  filter(regn_type == "N")
+
+advanced_regen4 <- advanced_regen %>% 
+  filter(!plot %in% advanced_regen3$plot)
+
+advanced_regen_final <- advanced_regen4 %>% 
+    mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+  mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+  select(-germ_id) %>% 
+  distinct()
+
+```
+
+Now add this back in 
+```{r}
+zero_plots_final <- bind_rows(zero_plots2, advanced_regen_final)
+```
+
+So now we count douglas-fir
+```{r}
+regen_data_ready_count <- regen_data %>% 
+  filter(!plot %in% zero_plots_final$plot) %>% 
+  filter(spp == "Fd", regn_type == "N") %>% 
+  group_by(gap, plot) %>% 
+  summarise(count = n()) 
+```
+
+
+NOw we create a dataframe to merge into zeros
+```{r}
+zero_counts <- zero_plots_final %>% 
+  select(gap, plot) %>% 
+  mutate(count = 0)
+```
+
+
+bind the two dataframes
+```{r}
+regen_by_plot <- bind_rows(regen_data_ready_count, zero_counts)
+```
+
+
+add TPH
+```{r regen_by_plot}
+regen_by_plot <- regen_by_plot %>% 
+  mutate(tph = count * 1000)
+```
+
+Now let's find density by gap
+```{r regen_by_gap}
+regen_by_gap <- regen_by_plot %>% 
+  group_by(gap) %>% 
+  summarise(mean_density = mean(tph),
+            sem_density = sd(tph)/sqrt(n()))
+```
+
+Now to obtain scatter plots for the 4Ring and 5Ring LAI we must upload the PASG data 
+
+First we have to clean names 
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+  n <- if (is.data.frame(.data)) colnames(.data) else .data
+
+  n <- gsub("%+", "_pct_", n)
+  n <- gsub("\\$+", "_dollars_", n)
+  n <- gsub("\\++", "_plus_", n)
+  n <- gsub("-+", "_minus_", n)
+  n <- gsub("\\*+", "_star_", n)
+  n <- gsub("#+", "_cnt_", n)
+  n <- gsub("&+", "_and_", n)
+  n <- gsub("@+", "_at_", n)
+
+  n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+  n <- gsub("([A-Z][a-z])", "_\\1", n)
+  n <- tolower(trimws(n))
+  
+  n <- gsub("(^_+|_+$)", "", n)
+  
+  n <- gsub("_+", "_", n)
+  
+  if (unique) n <- make.unique(n, sep = "_")
+  
+  if (is.data.frame(.data)) {
+    colnames(.data) <- n
+    .data
+  } else {
+    n
+  }
+}
+```
+
+Loading regen_data1 with names cleaned and gap and plot numbers seperated
+```{r}
+regen_data1N <- read.csv('regen_data1.csv') %>% 
+ clean_names() %>% 
+  separate(gap_no, c("gap","plot")) 
+colnames(regen_data1N)
+```
+
+Now we obtain informatiion on the LAI  
+```{r}
+regen_LAI <- regen_data1N%>%
+  group_by(gap, plot, gap_type) %>% 
+  select(lai_4_ring,lai_5_ring)
+view(regen_LAI)
+```
+
+Now we get the LAI 4&5 for salavage plots
+```{r}
+regen_LAIS <- regen_LAI %>%
+  filter(gap_type =="S")
+```
+
+Now we get the LAI 4&5 for natural plots
+```{r}
+regen_LAIN <- regen_LAI %>%
+  filter(gap_type =="N")
+```
+
+NOw we join regen plot data and LAIS (salvage) data
+
+```{r}
+S_regen_LAI <- regen_by_plot %>% left_join(regen_LAIS) %>% 
+  filter (gap_type =="S")
+
+```
+
+Now we obtain regen plot data and LAIN (natuaral) data
+
+```{r}
+N_regen_LAI <-  regen_by_plot %>% left_join(regen_LAIN) %>% 
+  filter(gap_type =="N")
+
+```
+
+Now we plot scatter plots for both LAI Salavage
+
+```{r}
+SScplot_LAI4R <- plot(lai_4_ring ~ tph, data = S_regen_LAI)
+SScplot_LAI4R1 <- plot (tph ~ lai_4_ring, data = S_regen_LAI) 
+SScplot_LAI5R <- plot (lai_5_ring ~ tph, data = S_regen_LAI)
+```
+
+Now we plot scatter plots for both LAI Natural
+
+```{r}
+NScplot_4LAI <- plot(lai_4_ring ~tph, data= N_regen_LAI)
+NScplot_5LAI <- plot(lai_5_ring ~tph, data= N_regen_LAI)
+```
+
+Lets fix the germinants by taking them out
+```{r}
+Zeroplots_germinants <- plots_with_germinates %>% 
+   filter(height == growth) %>% 
+   mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+                           vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+   mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+   select(-germ_id) %>% 
+   distinct() %>% 
+  mutate(count = 0)
+```
+ 
+ #Now lets add this back in 
+ 
+```{r}
+zero_plots_final1 <- bind_rows(zero_plots_final, Zeroplots_germinants)
+```
+
+Lets make a new count for the DF
+ 
+```{r regen DF}
+ regen_data_ready_count1 <- regen_data %>% 
+   filter(!plot %in% zero_plots_final1$plot) %>% 
+   filter(spp == "Fd", regn_type == "N") %>% 
+    group_by(gap, plot, gap_type) %>% 
+   summarise(count = n()) 
+view(regen_data_ready_count1)
+```
+
+Regen for all species 
+```{r Regen all species}
+ regen_data_allspecies <- regen_data %>% 
+   filter(!plot %in% zero_plots_final1$plot) %>% 
+   filter(regn_type == "N") %>% 
+    group_by(gap, plot, gap_type, spp) %>% 
+   summarise(count = n()) 
+view(regen_data_allspecies)
+```
+
+Now we create a new data frame to merge the zero_plots
+
+```{r  zero_counts1}
+ zero_counts1 <- zero_plots_final1 %>% 
+    select(gap, plot, gap_type) %>% 
+      mutate(count = 0)
+view(zero_counts1)
+```
+
+Now I will bind the 2 data frames 
+
+```{r Regen DF plots}
+regen_by_plot1 <- bind_rows(regen_data_ready_count1, zero_counts1) %>% 
+  group_by(gap, plot) %>% 
+    distinct() 
+view(regen_by_plot1)
+```
+ 
+ Regen all species plot
+```{r regen all species plot}
+regen_by_plotallspecies  <- bind_rows(regen_data_allspecies, zero_counts1) %>% 
+  group_by(gap, plot) %>% 
+    distinct() 
+view(regen_by_plotallspecies)
+```
+ 
+Now I will convert to total per hectare
+```{r regen_by_plot1}
+regen_by_plot1 <- regen_by_plot1 %>% 
+    mutate(tph = count * 1000)
+View(regen_by_plot1)
+```
+
+Regen in hectares all species 
+```{r Regen all species hectares}
+regen_by_plotallspecies <- regen_by_plotallspecies %>% 
+  mutate(tph = count * 1000)
+View(regen_by_plotallspecies)
+```
+
+Now I will find density per gap
+```{r regen_by_gap1}
+regen_by_gap1 <- regen_by_plot1 %>% 
+     group_by(gap) %>%
+    summarise(tphg = sum(tph), mean_density = mean(tph), sem_density = sd(tph)/sqrt(n()))
+View(regen_by_gap1)
+```
+ 
+Now i will find regen per gap all species 
+```{r regen br gap all species}
+regen_by_gapallspecies <- regen_by_plotallspecies %>% 
+     group_by(gap, spp) %>%
+    summarise(tphg = sum(tph), mean_density = mean(tph), sem_density = sd(tph)/sqrt(n()))
+View(regen_by_gapallspecies)
+```
+
+Find the growth variables
+```{r growth variables}
+RegenGrowth <- regen_data %>% 
+  select(gap, plot, gap_type, spp, height, growth, diameter, width) %>% 
+  group_by(gap, plot, gap_type)
+view(RegenGrowth)
+```
+
+Now that it seems we have the right data, lets proceed to plot the scatter plots.
+Since we already have the data on the LAI 4&5 for both S and N plots, we will proceed to join them to the new data we have.
+ 
+For salvage LAI and plots
+```{r}
+
+ S_regen_LAI1 <- regen_by_plot1 %>% left_join(regen_LAIS) %>% 
+    filter (gap_type =="S")
+```
+
+For natural LAI and plots
+```{r}
+N_regen_LAI1 <-  regen_by_plot1 %>% left_join(regen_LAIN) %>% 
+    filter(gap_type =="N")
+```
+ 
+Now we plot scatter plots for both LAI Salavage
+```{r scatter plot tph vrs lai S}
+SScplot_LAI4R1 <- plot(tph ~ lai_4_ring, data = S_regen_LAI1)
+SScplot_LAI5R1 <- plot (tph ~ lai_5_ring, data = S_regen_LAI1)
+
+ggplot(S_regen_LAI1, aes(lai_4_ring, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salvage", x ="LAI", y= "Total trees per hectare")
+
+ggplot(S_regen_LAI1, aes(lai_5_ring, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salvage", x ="LAI", y= "Total trees per hectare")
+
+```
+
+ 
+ 
+ #Now that we have the salavage LAI's lets plot that of the natural.
+```{r scater plot tph vrs lai S}
+ NScplot_4LAI1 <- plot(tph ~ lai_4_ring, data= N_regen_LAI1)
+ NScplot_5LAI1 <- plot(tph ~lai_5_ring, data= N_regen_LAI1)
+ 
+ ggplot(N_regen_LAI1, aes(lai_4_ring, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="LAI", y= "Total trees per hectare")
+
+ggplot(N_regen_LAI1, aes(lai_5_ring, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="LAI", y= "Total trees per hectare")
+```
+
+
+#We have the scatter plots now. Before we continue let load the VRP data and find the summary on the species. First we clean names
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+    n <- if (is.data.frame(.data)) colnames(.data) else .data
+    
+    n <- gsub("%+", "_pct_", n)
+    n <- gsub("\\$+", "_dollars_", n)
+    n <- gsub("\\++", "_plus_", n)
+    n <- gsub("-+", "_minus_", n)
+    n <- gsub("\\*+", "_star_", n)
+    n <- gsub("#+", "_cnt_", n)
+    n <- gsub("&+", "_and_", n)
+    n <- gsub("@+", "_at_", n)
+    
+    n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+    n <- gsub("([A-Z][a-z])", "_\\1", n)
+    n <- tolower(trimws(n))
+    
+    n <- gsub("(^_+|_+$)", "", n)
+    
+    n <- gsub("_+", "_", n)
+    
+    if (unique) n <- make.unique(n, sep = "_")
+    
+    if (is.data.frame(.data)) {
+       colnames(.data) <- n
+       .data
+    } else {
+       n
+    }
+ }
+
+```
+
+Then we load the data VRP data
+```{r}
+regen_data2 <- read.csv('regen_data2.csv') %>% 
+    clean_names() %>% 
+    separate(gap_no, c("gap","plot")) 
+ colnames(regen_data2)
+```
+
+To obtain the sum and mean of species  for both gap types we have: 
+```{r Salvage Vigour per plot}
+S_vrp_summarySplots <- regen_data2 %>%
+  group_by(gap, plot, spp, n) %>% 
+  filter(gap_type =='S')%>% 
+  mutate(baf = n*3) %>% 
+  group_by(gap, plot) %>% 
+  mutate(total = sum(baf)) %>% 
+  mutate(percent = (baf/total) * 100)
+  view(S_vrp_summarySplots) 
+```
+
+For the Salvage gap
+```{r Salvage vigour per gap}
+S_vrp_summarySgap <- S_vrp_summarySplots %>% 
+  group_by(gap, spp) %>% 
+  mutate(baf = n*3) %>% 
+  filter(baf != "NA") %>%
+  summarise(bafn = sum(baf), sumn =sum(n), mean_baf = mean(baf),sem_baf =sd(baf)/sqrt(n()))%>%
+  mutate(total_meanbaf = sum(mean_baf)) %>% 
+  mutate(percent= (mean_baf/total_meanbaf)*100)
+view(S_vrp_summarySgap)
+```
+
+For Salavge VRP general characteristics
+```{r Salavge VRP general characteristics}
+S_vrp_summarySStats <- S_vrp_summarySplots %>% 
+  group_by(spp) %>% 
+  mutate(baf = n*3) %>% 
+  filter(baf != "NA") %>%
+  summarise(bafn = sum(baf), sumn =sum(n), mean_baf = mean(baf),sem_baf =sd(baf)/sqrt(n()))%>%
+  mutate(total_meanbaf = sum(mean_baf)) %>% 
+  mutate(percent= (mean_baf/total_meanbaf)*100) %>% 
+  filter(mean_baf!= "0")
+view(S_vrp_summarySStats)
+```
+
+
+Now we do the same for the natural plot VRP
+
+```{r natural plot VRP}
+N_vrp_summaryplots <- regen_data2 %>% 
+  group_by(gap, plot, spp, vrp_baf3, n) %>% 
+  filter(gap_type == 'N') %>% 
+  mutate(baf = n*3) %>% 
+  group_by(gap, plot) %>% 
+  mutate(total = sum(baf)) %>% 
+  mutate(percent = (baf/total) * 100)
+view(N_vrp_summaryplots)
+```
+
+ For the natural gap VRP 
+```{r natural gap VRP }
+N_vrp_summarygap <- N_vrp_summaryplots %>% 
+ group_by(gap, spp) %>% 
+  mutate(baf = n*3) %>% 
+  filter(baf != "NA") %>%
+  summarise(bafn = sum(baf), sumn =sum(n), mean_baf = mean(baf),sem_baf =sd(baf)/sqrt(n()))%>%
+  mutate(total_meanbaf = sum(mean_baf)) %>% 
+  mutate(percent= (mean_baf/total_meanbaf)*100)
+view(N_vrp_summarygap)
+```
+
+Natural VRP general characteristics 
+```{r}
+N_vrp_summaryNStats <- N_vrp_summaryplots %>% 
+ group_by(spp) %>% 
+  mutate(baf = n*3) %>% 
+  filter(baf != "NA") %>%
+  summarise(bafn = sum(baf), sumn =sum(n), mean_baf = mean(baf),sem_baf =sd(baf)/sqrt(n()))%>%
+  mutate(total_meanbaf = sum(mean_baf)) %>% 
+  mutate(percent= (mean_baf/total_meanbaf)*100) %>% 
+  filter(mean_baf!= "0")
+view(N_vrp_summaryNStats)
+ 
+```
+BAF for plots 
+```{r}
+BAF_final <- bind_rows(S_vrp_summarySplots, N_vrp_summaryplots)
+view(BAF_final)
+```
+
+
+Since I couldnt plot bar graphs for the VRP data. Lets continue. 
+Lets work on the other light indices  and other growth parameters (height and height growth). 
+
+```{r}
+regen_data_ready_count2 <- regen_data %>% 
+   filter(!plot %in% zero_plots_final1$plot) %>% 
+   filter(regn_type == "N") %>% 
+   group_by(gap, plot) %>% 
+  select(gap, plot, gap_type, spp, height, growth, diameter, width )
+  
+```
+
+We need the zeros in the data 
+```{r}
+zero_counts2 <- zero_plots_final1 %>% 
+    mutate(count = 0)
+```
+
+Merging the 2 dataframes to obtain data on the growth parameters.
+ 
+```{r}
+regen_by_plot2 <- bind_rows(regen_data_ready_count2, zero_counts2) %>% 
+    distinct()
+```
+
+Now that we have the growth parameters and the zeros lets work on the gap types first.
+
+Salvage regn by plot 2
+
+```{r Salvage regn by plot 2}
+regen_by_plot2S <- regen_by_plot2 %>% 
+  filter(gap_type =="S") %>% 
+  group_by(gap, plot) %>% 
+  distinct()  %>% 
+  mutate(growth = as.numeric(growth)) 
+```
+
+Natural regn by plot 
+
+```{r Natural regn by plot 2}
+regen_by_plot2N <- regen_by_plot2 %>% 
+  filter(gap_type=="N") %>% 
+  distinct() %>% 
+  mutate(growth = as.numeric(growth))
+view(regen_by_plot2N)
+```
+
+First lets deal with the mortaltity for Salvage per gap
+
+```{r mortaltity for Salvage per gap}
+mortS <- regen_by_plot2S%>% 
+select(gap, plot, spp, status) %>% 
+  mutate(new_status= ifelse(status=="0", 0, status * 1))
+
+mortzero <- mortS %>% 
+  filter(spp==0) %>% 
+  mutate(new_status = ifelse(spp == "0", NA, status * NA)) 
+
+mortSnew <- bind_rows(mortS, mortzero)%>%
+  distinct()  
+
+morrtSnewG <- mortSnew %>% 
+group_by(gap,new_status) %>%
+summarise(count= n()) %>% 
+  filter(new_status=="0") %>% 
+  mutate(tph = count * 1000)
+View(morrtSnewG)
+
+MortSgeneral <- mortSnew %>%
+  group_by(spp, new_status) %>%
+summarise(count= n()) %>%
+  mutate(total = sum(count)) %>%  
+  mutate(Percent=(count/total)* 100)
+view(MortSgeneral)
+```
+
+Now mortatlity for Natural per gap
+
+```{r mortatlity for Natural per gap}
+mortN <- regen_by_plot2N%>% 
+select(gap, plot, spp, status) %>% 
+  mutate(new_status= ifelse(status=="0", 0, status * 1))
+
+mortzeroN <- mortN %>% 
+  filter(spp==0) %>% 
+  mutate(new_status = ifelse(spp == "0", NA, status * NA)) 
+
+mortNnew <- bind_rows(mortN, mortzeroN)%>%
+  distinct()
+
+mortNnewG <- mortNnew %>% 
+group_by(gap,new_status) %>%
+summarise(count= n()) %>% 
+  filter(new_status=="0") %>% 
+  mutate(tph = count * 1000)
+View(mortNnewG)
+
+MortNgeneral <- mortNnew %>%
+  group_by(new_status) %>%
+summarise(count= n()) %>%
+  mutate(total = sum(count)) %>%  
+  mutate(Percent=(count/total)* 100)
+view(MortNgeneral)
+```
+
+ Now that we have the mortality, lets move on to the height, growth, dameter and crown
+
+For Height Salavage
+```{r Height Salvage}
+HsummaryS <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, height) %>%
+  group_by(gap,plot) %>% 
+  summarise(count=n(), meanH = mean(height, na.rm = TRUE), semH =sd(height, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() %>% 
+  filter(meanH != 0)
+```
+
+For Height Summary Natural
+```{r Height Summary Natural}
+HsummaryN <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, height) %>%
+  group_by(gap,plot) %>% 
+  summarise(count=n(), meanH = mean(height, na.rm = TRUE), semH =sd(height, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() %>% 
+  filter(meanH != 0)
+```
+
+Now for the height growth Salavage..... Check mean (growth)
+```{r height growth Salavage}
+GsummaryS <- regen_by_plot2S %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, growth) %>%
+  group_by(gap,plot) %>% 
+  mutate(growth = as.numeric(growth)) %>%
+  summarise(count=n(), meanG = mean(growth, na.rm = TRUE), semG =sd(growth, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct()%>% 
+  filter(meanG != 0)
+```
+
+For Height Growth Natural.... check mean(growth)
+```{r Height Growth Natural}
+GsummaryN <- regen_by_plot2N %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, growth) %>%
+  group_by(gap, plot) %>% 
+  mutate(growth = as.numeric(growth)) %>%
+  summarise(count=n(), meanG = mean(growth, na.rm = TRUE), semG =sd(growth, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() %>% 
+  filter(meanG != 0)
+```
+
+For Diameter Salavage 
+```{r Diameter Salavage}
+DsummaryS <- regen_by_plot2S %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, diameter) %>%
+  group_by(gap, plot) %>%
+  distinct() %>% 
+  summarise(count=n(), meanD = mean(diameter, na.rm = TRUE), semD =sd(diameter, na.rm = TRUE)/sqrt(n())) %>% 
+  filter(meanD !="NA") %>% 
+  filter(meanD != 0)
+```
+
+For Diameter Natural
+```{r  Diameter Natural}
+DsummaryN <- regen_by_plot2N %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, diameter) %>%
+  group_by(gap, plot) %>%
+  distinct() %>% 
+  summarise(count=n(), meanD = mean(diameter, na.rm = TRUE), semD =sd(diameter, na.rm = TRUE)/sqrt(n())) %>%  
+   filter(meanD !="NA") %>% 
+  filter(meanD != 0)
+```
+
+For Crown width Salavge... Check mean width
+```{r Crown width Salavge}
+WsummaryS <- regen_by_plot2S %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, width) %>%
+  group_by(gap,plot) %>% 
+  mutate(width = as.numeric(width)) %>% 
+  summarise(count=n(), meanW = mean(width, na.rm = TRUE), semW =sd(width, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() %>% 
+  filter(meanW != 0)
+```
+
+
+For Crown Width Natural .... Check mean width
+
+```{r Crown Width Natural}
+WsummaryN <- regen_by_plot2N %>% 
+  filter(regn_type =="N") %>% 
+  select(gap, plot, width) %>%
+  group_by(gap,plot) %>%
+  mutate(width = as.numeric(width)) %>%
+  summarise(count=n(), meanW = mean(width, na.rm = TRUE), semW =sd(width, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() %>% 
+  filter(meanW != 0)
+```
+
+Now lets deal with the Damage and Vigour 
+
+For Damage Salvage
+```{r  Damage Salvage per plot}
+DAsummarySgap <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, damage) %>%
+  group_by(gap,damage) %>% 
+  distinct() %>%
+  filter(damage!="NA") %>% # this part was to remove all plots with NA values*** 
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummarySgap)
+```
+
+Damage Salvage per plot
+```{r}
+DAsummarySplot <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, spp, damage) %>%
+  group_by(gap,plot, spp, damage) %>% 
+  distinct() %>%
+  filter(damage!="NA") %>% # this part was to remove all plots with NA values*** 
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummarySplot)
+```
+
+Damage Salvage general statistics 
+```{r Damage Salvage general statistics }
+DAsummarySStats <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(damage) %>%
+  group_by(damage) %>% 
+  distinct() %>%
+  filter(damage!="NA") %>% # this part was to remove all plots with NA values***
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummarySStats)
+```
+
+Now for Damage Natural
+
+```{r Damage Natural per plot}
+DAsummaryNplots <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, spp, damage) %>%
+  group_by(gap,plot, spp, damage) %>% 
+  distinct() %>%
+   filter(damage!="NA") %>% # this part was to remove all plots with NA values*** 
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummaryNplots)
+```
+
+Damage natural per gap
+```{r Damage natural per gap}
+DAsummaryNgap <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, damage) %>%
+  group_by(gap, damage) %>% 
+  distinct() %>%
+   filter(damage!="NA") %>% # this part was to remove all plots with NA values*** 
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummaryNgap)
+```
+
+Damage natural general statistics 
+```{r Damage natural general statistics}
+DAsummaryNStats <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(damage) %>%
+  group_by(damage) %>% 
+  distinct() %>%
+  filter(damage!="NA") %>% # this part was to remove all plots with NA values***
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(DAsummaryNStats)
+
+
+Damage_final <- DAsummarySplot %>% left_join(DAsummaryNplots)
+view(Damage_final)
+```
+
+Now that we have the damage sorted out, let's work on the vigour
+
+For the vigour Salvage
+
+```{r vigour Salvage per plot}
+VsummarySplots <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, vigour) %>%
+  group_by(gap, plot, vigour) %>% 
+  summarise(count=n()) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% #this part was to remove all plots with NA values***
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_vigour = (count/Count_total) * 100)
+view(VsummarySplots)
+```
+
+Vigour Salvage per gap 
+```{r Vigour Salvage per gap }
+VsummarySgap <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, vigour) %>%
+  group_by(gap,vigour) %>% 
+  summarise(count=n()) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% # this part was to remove all plots with NA values***
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_vigour = (count/Count_total) * 100)
+view(VsummarySgap)
+```
+
+Vigour slavage general summary 
+```{r Vigour slavage general summary }
+VsummarySStats <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(vigour) %>%
+  group_by(vigour) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% # this part was to remove all plots with NA values***
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(VsummarySStats)
+```
+
+For the vigour Natural per plot 
+
+```{r vigour Natural per plot }
+VsummaryNplots <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, vigour) %>%
+  group_by(gap, plot,vigour) %>% 
+  summarise(count=n()) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% # this part was to remove all plots with NA values***
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_vigour = (count/Count_total) * 100)
+view(VsummaryNplots)
+```
+
+Vigour Natural per gap
+```{r Vigour Natural per gap}
+VsummaryNgap <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, vigour) %>%
+  group_by(gap,vigour) %>% 
+  summarise(count=n()) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% # this part was to remove all plots with NA values***
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_vigour = (count/Count_total) * 100)
+view(VsummaryNgap)
+```
+
+Vigour Natural general characteristics 
+```{r VsummaryNStats}
+VsummaryNStats <- regen_by_plot2N %>%
+  filter(regn_type =="N") %>% 
+  select(vigour) %>%
+  group_by(vigour) %>% 
+  distinct() %>%
+  filter(vigour!="NA") %>% # this part was to remove all plots with NA values***
+  summarise(count=n()) %>%
+  mutate(Count_total = sum(count)) %>%
+  mutate(Percent_damage = (count/Count_total) * 100)
+view(VsummaryNStats)
+```
+
+Now lets work on the GLA openness and above and below ground irradiances and hope to find some relationship
+
+lets begin with Openness for Salavge
+
+```{r OpennnessS}
+OpennnessS <- regen_data1N %>%
+  group_by(gap, plot) %>% 
+  filter(gap_type=="S") %>% 
+  select(x_site_open) 
+  
+```
+
+Openness for Natural
+```{r OpennnessN}
+OpennnessN <- regen_data1N %>%
+  group_by(gap, plot) %>% 
+  filter(gap_type=="N") %>% 
+  select(x_site_open) 
+```
+
+Now lets deal with the above-and-below irradiances
+in this instatnce we we will conside the trans total and the % trans total
+
+For the irradiance Salavge 
+
+```{r IrradianceS}
+IrradianceS <- regen_data1N %>%
+  group_by(gap, plot) %>% 
+  filter(gap_type=="S") %>% 
+  select("trans_tot", "x_trans_tot") 
+```
+
+For irradiance natural
+
+```{r IrradianceN}
+IrradianceN <- regen_data1N %>%
+  group_by(gap, plot) %>% 
+  filter(gap_type=="N") %>% 
+  select("trans_tot", "x_trans_tot")
+```
+
+Now we left join the different informations to obtain our scatter plots.
+
+Height
+
+```{r}
+H_open_S <- HsummaryS %>% left_join(OpennnessS)
+H_open_N <- HsummaryN %>% left_join(OpennnessN)
+H_irra_S <- HsummaryS %>% left_join(IrradianceS)
+H_irra_N <- HsummaryN %>% left_join(IrradianceN)
+H_LAI_S <- HsummaryS %>% left_join(regen_LAIS)
+H_LAI_N <- HsummaryN %>% left_join(regen_LAIN)
+```
+
+Growth
+
+```{r}
+G_open_S <- GsummaryS %>% left_join(OpennnessS)
+G_open_N <- GsummaryN %>% left_join(OpennnessN)
+G_irra_S <- GsummaryS %>% left_join(IrradianceS)
+G_irra_N <- GsummaryN %>% left_join(IrradianceN)
+G_LAI_S <- GsummaryS %>% left_join(regen_LAIS)
+G_LAI_N <- GsummaryN %>% left_join(regen_LAIN)
+```
+
+Diameter
+
+```{r}
+D_open_S <- DsummaryS %>% left_join(OpennnessS)
+D_open_N <- DsummaryN %>% left_join(OpennnessN)
+D_irra_S <- DsummaryS %>% left_join(IrradianceS)
+D_irra_N <- DsummaryN %>% left_join(IrradianceN)
+D_LAI_S <- DsummaryS %>% left_join(regen_LAIS)
+D_LAI_N <- DsummaryN %>% left_join(regen_LAIN)
+```
+
+Width
+
+```{r}
+W_open_S <- WsummaryS %>% left_join(OpennnessS)
+W_open_N <- WsummaryN %>% left_join(OpennnessN)
+W_irra_S <- WsummaryS %>% left_join(IrradianceS)
+W_irra_N <- WsummaryN %>% left_join(IrradianceN)
+W_LAI_S <- WsummaryS %>% left_join(regen_LAIS)
+W_LAI_N <- WsummaryN %>% left_join(regen_LAIN)
+```
+ 
+ Now lets try and plot some diagrams Using OPENNESS
+ 
+Height vrs Openness
+
+```{r} 
+ggplot(H_open_S, aes(x_site_open, meanH)) +
+  geom_point() +
+  theme_classic()+
+   labs(title= "Salvage", x= "%Site openess", y = "Total height (cm)")
+```
+
+```{r Natural}
+ggplot(H_open_N, aes(x_site_open, meanH)) +
+  geom_point() +
+  theme_classic()+
+  labs(title= "Natural", x= "%Site openess", y = "Total height (cm)")
+```
+
+Growth vrs Openness
+
+```{r Salvage_1}
+ggplot(G_open_S, aes(x_site_open, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "%Site openess", y = "Height increment (cm)")
+```
+
+```{r Natural_1}
+ggplot(G_open_N, aes(x_site_open, meanG)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Natural", x= "%Site openess", y = "Height increment (cm)")
+```
+
+Diameter vrs Openness
+
+```{r Salvage_2}
+ggplot(D_open_S, aes(x_site_open, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "%Site openess", y = "Diameter (cm)")
+```
+
+```{r Natural_2}
+ggplot(D_open_N, aes(x_site_open, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "%Site openess", y = "Diameter (cm)")
+```
+
+Crown width vrs Openness
+
+```{r}
+ggplot(W_open_S, aes(x_site_open, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "%Site openess", y = "Crown width (cm)")
+```
+
+```{r}
+ggplot(W_open_N, aes(x_site_open, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Natural", x= "%Site openess", y = "Crown width (cm)")
+
+```
+
+Now lets try and plot some diagrams Using IRRADIANCE (trans_tot & X_trans_tot)
+
+Height vrs Irradiance  
+
+```{r}
+ggplot(H_irra_S, aes(trans_tot, meanH)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "Transmitted total radiation", y = "Total height (cm)")
+
+ggplot(H_irra_S, aes(trans_tot, meanH)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "%Transmitted total radiation", y = "Total height (cm)")
+```
+
+
+```{r }
+ggplot(H_irra_N, aes(trans_tot, meanH)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "Transmitted total radiation", y = "Total height (cm)")
+
+ggplot(H_irra_N, aes(x_trans_tot, meanH)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "%Transmitted total radiation", y = "Total height (cm)")
+```
+
+Growth vrs Irradiance 
+
+```{r Growth vrs Irradiance }
+ggplot(G_irra_S, aes(trans_tot, meanG)) +
+geom_point() +
+theme_classic()+
+labs(title= "Salvage", x= "Transmitted total radiation", y = "Height increment (cm)")
+
+ggplot(G_irra_S, aes(x_trans_tot, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "%Transmitted total radiation", y = "Height increment(cm)")
+```
+
+```{r }
+ggplot(G_irra_N, aes(trans_tot, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "Transmitted total radiation", y = "Height increment(cm)")
+
+ggplot(G_irra_N, aes(x_trans_tot, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "%Transmitted total radiation", y = "Height increment(cm)")
+```
+
+Diameter vrs Irradiance 
+Salvage
+```{r Diameter vrs Irradiance}
+ggplot(D_irra_S, aes(trans_tot, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "Transmitted total radiation", y = "Diameter (cm)")
+
+ggplot(D_irra_S, aes(x_trans_tot, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "%Transmitted total radiation", y = "Diameter (cm)")
+```
+
+Natural
+```{r}
+ggplot(D_irra_N, aes(trans_tot, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "Transmitted total radiation", y = "Diameter (cm)")
+
+ggplot(D_irra_N, aes(x_trans_tot, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "%Transmitted total radiation", y = "Diameter (cm)")
+```
+
+Crown width vrs Irradiance 
+Salvage
+```{r Crown width vrs Irradiance }
+ggplot(W_irra_S, aes(trans_tot, meanW)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "Transmitted total radiation", y = "Crown width (cm)")
+
+ggplot(W_irra_S, aes(x_trans_tot, meanW)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "%Transmitted total radiation", y = "Crown width (cm)")
+```
+
+Natural
+```{r}
+ggplot(W_irra_N, aes(trans_tot, meanW)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "Transmitted total radiation", y = "Crown width (cm)")
+
+ggplot(W_irra_N, aes(x_trans_tot, meanW)) +
+geom_point() +
+theme_classic()+
+    labs(title= "Natural", x= "%Transmitted total radiation", y = "Crown width (cm)")
+```
+
+Height vrs LAI
+Salavge
+```{r Height vrs LAI}
+ggplot(H_LAI_S, aes(lai_4_ring, meanH)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "LAI", y = "Total height (cm)")
+
+ggplot(H_LAI_S, aes(lai_5_ring, meanH)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "LAI 5Rings", y = "Total height (cm)")
+```
+
+Natural
+```{r }
+ggplot(H_LAI_N, aes(lai_4_ring, meanH)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI", y = "Total height (cm)")
+  
+
+ggplot(H_LAI_N, aes(lai_5_ring, meanH)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI 5Rings", y = "Total height (cm)")
+```
+
+Growth vrs LAI
+Salvage
+```{r Growth vrs LAI }
+ggplot(G_LAI_S, aes(lai_4_ring, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "LAI 4Rings", y = "Height increment (cm)")
+
+ggplot(G_LAI_S, aes(lai_5_ring, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "LAI 5Rings", y = "Height increment (cm)")
+```
+
+Natural
+```{r }
+ggplot(G_LAI_N, aes(lai_4_ring, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI 4Rings", y = "Height increment (cm)")
+
+ggplot(G_LAI_N, aes(lai_5_ring, meanG)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI 5Rings", y = "Height increment (cm)")
+```
+
+Diameter vrs LAI
+Slavage
+```{r Diameter vrs LAI}
+ggplot(D_LAI_S, aes(lai_4_ring, meanD)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "LAI 4Rings", y = "Diameter (cm)")
+   
+
+ggplot(D_LAI_S, aes(lai_5_ring, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Salvage", x= "LAI 5Rings", y = "Diameter (cm)")
+```
+
+Natural
+```{r diameter vrs LAI }
+ggplot(D_LAI_N, aes(lai_4_ring, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI 4Rings", y = "Diameter (cm)")
+
+ggplot(D_LAI_N, aes(lai_5_ring, meanD)) +
+geom_point() +
+theme_classic()+
+  labs(title= "Natural", x= "LAI 5Rings", y = "Diameter (cm)")
+```
+
+Width vrs LAI
+Salavage
+```{r Width vrs LAI}
+ggplot(W_LAI_S, aes(lai_4_ring, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "LAI 4Rings", y = "Crown width (cm)")
+
+ggplot(W_LAI_S, aes(lai_5_ring, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Salvage", x= "LAI 5Rings", y = "Crown width (cm)")
+```
+
+Natural
+```{r }
+ggplot(W_LAI_N, aes(lai_4_ring, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Natural", x= "LAI 4Rings", y = "Crown width (cm)")
+
+ggplot(W_LAI_N, aes(lai_5_ring, meanW)) +
+geom_point() +
+theme_classic()+
+   labs(title= "Natural", x= "LAI 5Rings", y = "Crown width (cm)")
+```
+
+Let's work on the undeground cover, slope and aspect now. 
+
+Underground cover
+
+```{r Underground cover Salvage}
+Undcover_summaryS <- regen_data1N %>% 
+  select(gap, plot, gap_type, ms,ts,wd,gs,sb,fb,sl,rk,df) %>% 
+  group_by(gap, plot, gap_type) %>%
+  filter(gap_type =="S") 
+View(Undcover_summaryS)
+```
+
+
+```{r Underground cover Natural}
+Undcover_summaryN <- regen_data1N %>% 
+  select(gap, plot, gap_type, ms,ts,wd,gs,sb,fb,sl,rk,df) %>% 
+  group_by(gap, plot, gap_type) %>% 
+  filter(gap_type =="N") 
+ view(Undcover_summaryN)
+```
+
+Regen vrs underground cover
+
+```{r Regen vrs underground cover}
+Regen_by_coverS <- regen_by_plot1 %>%left_join(Undcover_summaryS) %>% 
+  filter(gap_type !="NA") 
+
+  
+Regen_by_coverN <- regen_by_plot1 %>%left_join(Undcover_summaryN) %>% 
+  filter(gap_type !="NA")
+```
+
+Now let's work on the Aspect and Slope 
+Salvage
+
+```{r Salvage Aslo}
+Aslo_summaryS <- regen_data1N %>% 
+  select(gap, plot, gap_type, aspect, slope) %>% 
+  group_by(gap, plot) %>%
+  filter(gap_type =="S") 
+ 
+```
+
+Transforming the aspect Salvage
+```{r Transforming the aspect Salvage}
+New_aspectS <- Aslo_summaryS %>% 
+  select(gap_type, aspect) %>% 
+  mutate(aspectT = cos(rad(0-aspect))+1)
+```
+
+Natural
+```{r Natural Aslo}
+Aslo_summaryN <- regen_data1N %>% 
+  select(gap, plot, gap_type, aspect, slope) %>% 
+  group_by(gap, plot) %>%
+  filter(gap_type =="N")
+```
+Transforming aspect Natural
+```{r}
+New_aspectN <- Aslo_summaryN %>% 
+  select(gap_type, aspect) %>% 
+  mutate(aspectT = cos(rad(0-aspect))+1)
+```
+
+Plotting aspect 
+```{r Plot of aspects}
+ggplot(New_aspectS, aes(aspect, aspectT)) +
+geom_point() +
+theme_classic()+
+  labs(title = "Salvage", x = "Measured aspect", y = "Transformed aspect")
+
+ggplot(New_aspectN, aes(aspect, aspectT)) +
+geom_point() +
+theme_classic()+
+  labs(title = "Natural", x = "Measured aspect", y = "Transformed aspect")
+```
+
+
+Aspect and slope vrs Regen
+
+```{r Aspect and slope vrs Regen}
+Regen_by_Aslo_S <- regen_by_plot1 %>% left_join(Aslo_summaryS) %>% 
+  filter(gap_type =="S")
+
+Regen_by_Aslo_N <- regen_by_plot1 %>% left_join(Aslo_summaryN) %>% 
+  filter(gap_type !="NA")
+
+Regen_by_NewaspectS <- regen_by_plot1 %>% left_join(New_aspectS) %>% 
+   filter(gap_type =="S")
+
+Regen_by_NewaspectN <- regen_by_plot1 %>% left_join(New_aspectN) %>% 
+   filter(gap_type !="NA")
+``` 
+
+Plot for aspect and slope relative to regeneration 
+Salvage
+```{r}
+ggplot(Regen_by_NewaspectS, aes(aspectT, tph)) +
+geom_point() +
+theme_classic() +
+labs(title = "Salvage", x = "Transformed aspect", y = "TPH")
+
+ggplot(Regen_by_Aslo_S, aes(slope, tph)) +
+geom_point() +
+theme_classic()+
+labs(title = "Salvage", x = "Slope", y = "TPH")
+```
+
+Natural 
+```{r}
+ggplot(Regen_by_NewaspectN, aes(aspectT, tph)) +
+geom_point() +
+theme_classic()+
+labs(title = "Natural", x = "Transformed aspect", y = "TPH")
+
+ggplot(Regen_by_Aslo_N, aes(slope, tph)) +
+geom_point() +
+theme_classic()+
+labs(title = "Natural", x = "Slope", y = "TPH")
+```
+
+Could there be a possible relationship between height growth and slope and aspect?
+Joining the datasets together
+
+```{r}
+Height_vrs_Aslo_S <- HsummaryS %>% left_join(Aslo_summaryS)
+Height_vrs_Aslo_N <- HsummaryN %>% left_join(Aslo_summaryN)
+Growth_vrs_Aslo_S <- GsummaryS %>% left_join(Aslo_summaryS)
+Growth_vrs_Aslo_N <- GsummaryN %>% left_join(Aslo_summaryN)
+
+Height_vrs_aspectS <- HsummaryS %>% left_join(New_aspectS)
+Height_vrs_aspectN <- HsummaryN %>% left_join(New_aspectN)
+Growth_vrs_aspectS <- GsummaryS %>% left_join(New_aspectS)
+Growth_vrs_aspectN <- GsummaryN %>% left_join(New_aspectN)
+```
+
+Plots of height and growth vrs slope and aspect
+Salvage
+```{r }
+ggplot(Height_vrs_aspectS, aes(aspectT, meanH, )) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Transformed aspect", y= "Total height (cm)")
+
+ggplot(Height_vrs_Aslo_S, aes(slope, meanH)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Slope", y= "Total height (cm)")
+```
+
+Natural
+```{r }
+ggplot(Height_vrs_aspectN, aes(aspectT, meanH)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Transformed aspect", y= "Total height (cm)")
+
+ggplot(Height_vrs_Aslo_N, aes(slope, meanH)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Slope", y= "Total height (cm)")
+```
+
+Now lets look at regen and underground cover plots and see if there is a relationship. Since I am unable to plot all the parameters at the same time. 
+Lets look at them one after the other and see the resultant graphs they produce.
+
+For Moss Slavage and natural
+
+```{r}
+ggplot(Regen_by_coverS, aes(ms, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Moss", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(ms, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Moss", y= "TPH")
+```
+
+For Trees Slavage and natural
+
+```{r}
+ggplot(Regen_by_coverS, aes(ts, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Trees", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(ts, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Trees", y= "TPH")
+```
+
+For Wood Salvage and Natural
+```{r}
+ggplot(Regen_by_coverS, aes(wd, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Salvage", x= "Wood", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(wd, tph)) +
+geom_point()+
+theme_classic()+
+    labs(title="Natural", x= "Wood", y= "TPH")
+```
+
+For Grass
+```{r}
+ggplot(Regen_by_coverS, aes(gs, tph)) +
+geom_point()+
+theme_classic()+
+    labs(title="Salvage", x= "Grass", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(gs, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Grass", y= "TPH")
+```
+
+For Shrub
+```{r}
+ggplot(Regen_by_coverS, aes(sb, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Shrub", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(sb, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Grass", y= "TPH")
+```
+
+For Forbs
+```{r}
+ggplot(Regen_by_coverS, aes(fb, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Forbs", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(fb, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Grass", y= "TPH")
+```
+
+For soil
+```{r}
+ggplot(Regen_by_coverS, aes(sl, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Soil", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(sl, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Soil", y= "TPH")
+```
+
+For rock 
+```{r}
+ggplot(Regen_by_coverS, aes(rk, tph)) +
+geom_point()+
+theme_classic()+ 
+  labs(title="Salvage", x= "Rock", y= "TPH")
+  
+
+ggplot(Regen_by_coverN, aes(rk, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Natural", x= "Rock", y= "TPH")
+```
+
+For Duff 
+```{r}
+ggplot(Regen_by_coverS, aes(df, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Duff", y= "TPH")
+
+ggplot(Regen_by_coverN, aes(df, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Duff", y= "TPH")
+```
+
+
+To determine the total height of seedling last year, I subtract the height increment from the total height to obtain last years height.
+
+```{r}
+LastyrHeightS <- regen_by_plot2S %>% 
+  mutate(LstyrHgt = height - growth)
+  view(LastyrHeightS)
+  
+LastyrHeightN <- regen_by_plot2N %>% 
+  mutate(LstyrHgt = height - growth)
+  view(LastyrHeightN)
+```
+
+
+```{r}
+ggplot(LastyrHeightS, aes(LstyrHgt, growth))+
+  geom_point()+
+  theme_classic()+
+  labs(title= "Salvage", x="Last year's total height (cm)", y= "Height increment (cm)")
+
+
+ggplot(LastyrHeightN, aes(LstyrHgt, growth))+
+  geom_point()+
+  theme_classic()+
+  labs(title= "Natural", x="Last year's total height (cm)", y= "Height increment (cm)")
+```
+
+Lets check for the summary statistics of the new height growth and see if it gives us a better plot
+
+For Height Salavage
+```{r}
+HnewsummaryS <- LastyrHeightS %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, LstyrHgt) %>%
+  group_by(gap,plot) %>% 
+  summarise(count=n(), meanH = mean(LstyrHgt, na.rm = TRUE), semH =sd(LstyrHgt, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct()
+```
+
+For Height Summary Natural
+```{r}
+HnewsummaryN <- LastyrHeightN %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, LstyrHgt) %>%
+  group_by(gap,plot) %>% 
+  summarise(count=n(), meanH = mean(LstyrHgt, na.rm = TRUE), semH =sd(LstyrHgt, na.rm = TRUE)/sqrt(n())) %>% 
+  distinct() 
+
+```
+
+Using means for last year height and increment
+```{r Using means for last year height and increment}
+Lst_vrs_HI_S <- HnewsummaryS %>%left_join(GsummaryS)
+Lst_vrs_HI_N <- HnewsummaryN %>%left_join(GsummaryN)
+```
+
+Now lets plot last year height and increment based on means 
+```{r last year height and increment }
+ggplot(Lst_vrs_HI_S, aes(meanH, meanG))+
+  geom_point()+
+  theme_classic()+
+  labs(title= "Salvage", x="Last year's total height (cm)", y= "Height increment (cm)")
+
+ggplot(Lst_vrs_HI_N, aes(meanH, meanG))+
+  geom_point()+
+  theme_classic()+
+  labs(title= "Natural", x="Last year's total height (cm)", y= "Height increment (cm)")
+```
+
+
+The above graphs look somewhat linear, so lets generate a linear model for both of them and choose the best fit ones 
+```{r Model 1 Salvage}
+Model1S <- lm(growth ~ LstyrHgt, data = LastyrHeightS)
+plot(Model1S)
+abline(Model1S, col="blue")
+Model1S
+summary(Model1S)
+AIC(Model1S)
+```
+
+```{r Model1 Natural}
+
+Model1N <- lm(growth ~ LstyrHgt, data = LastyrHeightN)
+plot(Model1N)
+abline(Model1N, col="blue")
+Model1N
+summary(Model1N)
+AIC(Model1N)
+```
+
+Model 2
+```{r Model2S}
+Model2S <- lm(meanH ~ meanG, data = Lst_vrs_HI_S)
+plot(Model2S)
+abline(Model2S, col="blue")
+Model2S
+summary(Model2S)
+AIC(Model2S)
+```
+
+Natural
+```{r Model 2N}
+Model2N <- lm(meanH ~ meanG, data = Lst_vrs_HI_N)
+plot(Model2N)
+abline(Model2N, col="blue")
+Model2N
+summary(Model2N)
+AIC(Model2N)
+```
+
+Lets join growth to underground cover
+
+```{r}
+Growth_by_coverS <- GsummaryS %>%left_join(Undcover_summaryS) %>% 
+  filter(gap_type !="NA") 
+
+  
+Growth_by_coverN <- GsummaryN %>%left_join(Undcover_summaryN) %>% 
+  filter(gap_type !="NA")
+```
+
+
+```{r}
+ggplot(Growth_by_coverS, aes(ms, meanG)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Moss", y= "Height increment (cm)")
+
+ggplot(Growth_by_coverN, aes(ms, meanG)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Moss", y= "Height increment (cm)")
+```
+
+NOw l am going to look at the influence of distance to edge of the plot
+```{r}
+neardist <- read_csv("near_distance.csv") %>% 
+   clean_names() %>% 
+    separate(plot_id, c("gap","plot"))
+ colnames(neardist)
+ summary(neardist)
+```
+
+Lets join the distance to TPH and height, growth, diameter and crown for the salvage 
+```{r distance to TPH}
+ dist_vrs_TPH_S <- (regen_by_plot1) %>%  left_join(Aslo_summaryS) %>% left_join(neardist) %>% 
+  filter(gap_type == "S") %>% 
+  filter(tph != "NA")
+view(dist_vrs_TPH_S) 
+
+dist_vrs_TPH_N <- (regen_by_plot1) %>%  left_join(Aslo_summaryN) %>% left_join(neardist) %>% 
+  filter(gap_type == "N") %>% 
+  filter(tph != "NA")
+view(dist_vrs_TPH_N)
+```
+
+Now lets join the distance to growth variables salvage 
+```{r distance to growth variables salvage}
+dist_vrs_growthvarS <- neardist %>% left_join(HsummaryS) %>% left_join(GsummaryS) %>% left_join(DsummaryS) %>% left_join(WsummaryS)  
+
+  
+dist_vrs_growthvarN <- neardist %>% left_join(HsummaryN) %>% left_join(GsummaryN) %>% left_join(DsummaryN) %>% left_join(WsummaryN)   
+```
+
+Now lets plot some graphs 
+```{r Distance vrs TPH}
+ggplot(dist_vrs_TPH_S, aes(near_distance, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to gap edge (m)", y= "Total trees per hectare")
+
+ggplot(dist_vrs_TPH_N, aes(near_distance, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to gap edge (m)", y= "Total trees per hectare")
+```
+
+NOw lets see the growth parameters
+```{r distance vrs height}
+ggplot(dist_vrs_growthvarS, aes(near_distance, meanH)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (m)", y= "Total height (cm)") +
+  xlim(0, 6.5)
+ 
+
+ggplot(dist_vrs_growthvarN, aes(near_distance, meanH)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (m)", y= "Total height (cm)") +
+  xlim(0, 4)
+
+```
+
+```{r diatance vrs growth}
+ggplot(dist_vrs_growthvarS, aes(near_distance, meanG)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (m)", y= "Height increment (cm)")  +
+  xlim(0, 7.5)
+ 
+
+ggplot(dist_vrs_growthvarN, aes(near_distance, meanG)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (m)", y= "Height increment (cm)")  +
+  xlim(0, 5)
+ 
+```
+
+```{r distance vrs diameter}
+ggplot(dist_vrs_growthvarS, aes(near_distance, meanD)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (m)", y= "Diameter (cm)")  +
+  xlim(0, 7)
+  
+
+ggplot(dist_vrs_growthvarN, aes(near_distance, meanD)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (m)", y= "Diameter (cm)")  +
+  xlim(0, 4)
+  
+```
+
+```{r distance vrs width}
+ggplot(dist_vrs_growthvarS, aes(near_distance, meanW)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (m)", y= "Crown width (cm)")  +
+  xlim(0, 7)
+  
+
+ggplot(dist_vrs_growthvarN, aes(near_distance, meanW)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (m)", y= "Crown width (cm)")  +
+  xlim(0, 4)
+ 
+```
+
+Lets find the relation between LAI and the distance to edge 
+```{r Joining LAI and the distance to edge}
+Dist_vrs_LAI <- neardist %>%  left_join(regen_data1N) 
+view(Dist_vrs_LAI)
+
+Dist_vrs_LAI_S <- Dist_vrs_LAI %>% 
+  filter(gap_type == "S")
+view(Dist_vrs_LAI_S)
+
+Dist_vrs_LAI_N <- Dist_vrs_LAI %>% 
+  filter(gap_type == "N")
+view(Dist_vrs_LAI_N)
+```
+ Lets find scatter plots 
+ 
+```{r Distance to edge vrs LAI4}
+ggplot(Dist_vrs_LAI_S, aes(near_distance, lai_4_ring)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (cm)", y= "LAI")
+  
+
+ggplot(Dist_vrs_LAI_N, aes(near_distance, lai_4_ring)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (cm)", y= "LAI")
+```
+ 
+```{r distance vrs LAI 5R}
+ggplot(Dist_vrs_LAI_S, aes(near_distance, lai_5_ring)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (cm)", y= "LAI 5rings")
+  
+
+ggplot(Dist_vrs_LAI_N, aes(near_distance, lai_5_ring)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (cm)", y= "LAI 5rings")
+```
+
+Now lets find scatter plot of height vrs crown 
+```{r Height vrs crown relationship}
+Hgt_vrs_crownS <- HsummaryS %>% left_join(WsummaryS)
+view(Hgt_vrs_crownS)
+
+Hgt_vrs_crownN <- HsummaryN %>% left_join(WsummaryN)
+view(Hgt_vrs_crownN)
+```
+ Now lets plot height vrs crown and see if there is any rekationship
+ 
+```{r}
+ggplot(Hgt_vrs_crownS, aes(meanW, meanH)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Crown width (cm)", y= "Total height (cm)")
+  
+
+ggplot(Hgt_vrs_crownN, aes(meanW, meanH)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Crown width (cm)", y= "Total height (cm)")
+```
+
+Now lets see if there is a relationship between BAF and distance to edge 
+```{r}
+BAF_vrs_distS <- S_vrp_summarySplots %>% left_join(neardist) 
+view(BAF_vrs_distS)
+
+BAF_vrs_distN <- N_vrp_summaryplots %>% left_join(neardist) 
+view(BAF_vrs_distN)
+```
+
+Now lets plot and see if there is a relationship
+```{r BA vrs distance to edge}
+ggplot(BAF_vrs_distS, aes(near_distance, total)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Distance to edge (m)", y= "Basal area (m^2)")
+  
+
+ggplot(BAF_vrs_distN, aes(near_distance, total)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Distance to edge (m)", y= "Basal area (m^2)")
+
+```
+
+Now lets find out if there is a relationship between BA and growth variables
+```{r Ba vrs growth }
+BAF_vrs_growthvarS <- S_vrp_summarySplots %>% left_join(regen_by_plot1) %>% left_join(HsummaryS) %>% left_join(GsummaryS) %>% left_join(DsummaryS) %>% left_join(WsummaryS)
+view(BAF_vrs_growthvarS)
+
+BAF_vrs_growthvarN <- N_vrp_summaryplots %>% left_join(regen_by_plot1) %>% left_join(HsummaryN) %>% left_join(GsummaryN) %>% left_join(DsummaryN) %>% left_join(WsummaryN)
+view(BAF_vrs_growthvarN)
+```
+
+Now lets plot and see if there is any relationship between BA and growth variables 
+```{r BA vrs TPH}
+ggplot(BAF_vrs_growthvarS, aes(total, tph)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y= "Total trees per hectare")
+  
+
+ggplot(BAF_vrs_growthvarN, aes(total, tph)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Basal area (m^2)", y= "Total trees per hectare")
+```
+
+```{r BA vrs height}
+ggplot(BAF_vrs_growthvarS, aes(total, meanH)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y= "Total height (cm)")
+  
+
+ggplot(BAF_vrs_growthvarN, aes(total, meanH)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Basal area (m^2)", y= "Total height (cm)")
+```
+
+```{r BA vrs Growth }
+ggplot(BAF_vrs_growthvarS, aes(total, meanG)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y= "Height increment (cm)")
+  
+
+ggplot(BAF_vrs_growthvarN, aes(total, meanG)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Basal area (m^2)", y= "Height increment (cm)")
+```
+
+```{r BA vrs diameter}
+ggplot(BAF_vrs_growthvarS, aes(total, meanD)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y= "Diameter (cm)") 
+
+  
+
+ggplot(BAF_vrs_growthvarN, aes(total, meanD)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Basal area (m^2)", y= "Diameter (cm)")
+  
+```
+
+```{r BA vrs crown}
+ggplot(BAF_vrs_growthvarS, aes(total, meanW)) +
+geom_point()+
+theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y= "Crown width (cm)") 
+
+  
+
+ggplot(BAF_vrs_growthvarN, aes(total, meanW)) +
+geom_point()+
+theme_classic()+
+   labs(title="Natural", x= "Basal area (m^2)", y= "Crown width (cm)")
+```
+
+Now lets see if there is a signicant difference between TPH for the natural and salvaged plots 
+
+```{r BOxplot of lai 4ring }
+ggplot(regen_data1N, aes(as.factor(gap_type), lai_4_ring))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "LAI 4rings")
+
+LAI_4rings_anova <- aov(lai_4_ring ~ gap_type, data = regen_data1N)
+summary(LAI_4rings_anova)
+
+```
+
+```{r Boxplot of lai 5rings}
+ggplot(regen_data1N, aes(as.factor(gap_type), lai_5_ring))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "LAI 5rings")
+
+LAI_5rings_anova <- aov(lai_5_ring ~ gap_type, data = regen_data1N)
+summary(LAI_4rings_anova)
+```
+
+ Now lets see tph
+```{r tph boxplot  natural vrs salvage}
+tph_vrs_regen <- regen_by_plot1 %>% left_join(regen_data1N) %>% 
+select(tph, gap_type)
+view(tph_vrs_regen)
+
+ggplot(tph_vrs_regen, aes(as.factor(gap_type), tph))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x="gap_type", y="TPH")
+
+TPH_anova <- aov(tph ~ gap_type, data = tph_vrs_regen)
+summary(TPH_anova)
+```
+ 
+Now lets see total radiation 
+```{r  Total radiation boxplot  natural vrs salvage}
+ggplot(regen_data1N, aes(as.factor(gap_type), trans_tot))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "Total transmitted radiation")
+
+Totalradiation_anova <- aov(trans_tot ~ gap_type, data = regen_data1N)
+summary(Totalradiation_anova)
+```
+
+Now lets see %openness 
+```{r  %Openness boxplot  natural vrs salvage}
+ggplot(regen_data1N, aes(as.factor(gap_type), x_site_open))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "%Opennness")
+
+Openness_anova <- aov(x_site_open ~ gap_type, data = regen_data1N)
+summary(Totalradiation_anova)
+```
+
+Now lets see %Total radiation 
+```{r  %total radiation boxplot  natural vrs salvage}
+ggplot(regen_data1N, aes(as.factor(gap_type), x_trans_tot))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "%Total transmitted radiation")
+
+Openness_anova <- aov(x_trans_tot ~ gap_type, data = regen_data1N)
+summary(Totalradiation_anova)
+```
+
+For growth variables 
+```{r Growth variables boxplot Natural vrs Salvage}
+GrowthVariables <- regen_by_plot2 %>%
+  select(gap, plot, gap_type, height, growth, diameter, width) %>%
+  group_by(gap,plot, gap_type) %>% 
+  mutate(height = as.numeric(height), growth = as.numeric(growth), diameter = as.numeric(diameter), width = as.numeric(width), ) %>% 
+  summarise(count=n(), meanH = mean(height, na.rm = TRUE), meanG = mean(growth, na.rm = TRUE), meanD = mean(diameter, na.rm = TRUE), meanW = mean(width, na.rm = TRUE)) %>% 
+  distinct()
+ 
+```
+
+Now lets see height natural vrs salvage 
+```{r height natural vrs salvage }
+ggplot(GrowthVariables, aes(as.factor(gap_type), meanH))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "Total height (cm)")
+
+Height_anova <- aov(meanH ~ gap_type, data = GrowthVariables)
+summary(Height_anova)
+```
+
+```{r growth natural vrs salvage}
+ggplot(GrowthVariables, aes(as.factor(gap_type), meanG))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "Height increment (cm)")
+
+Growth_anova <- aov(meanG ~ gap_type, data = GrowthVariables)
+summary(Growth_anova)
+```
+
+```{r diameter natural vrs salvage}
+ggplot(GrowthVariables, aes(as.factor(gap_type), meanD))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "Diameter (cm)")
+
+Diameter_anova <- aov(meanD ~ gap_type, data = GrowthVariables)
+summary(Diameter_anova)
+```
+
+```{r crown natural vrs salvage}
+ggplot(GrowthVariables, aes(as.factor(gap_type), meanW))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(x= "Gap type", y= "Crown width (cm)")
+
+Width_anova <- aov(meanW ~ gap_type, data = GrowthVariables)
+summary(Width_anova)
+```
+
+Test for the relationship between openness and LAI
+
+```{r Relationship between openness and LAI}
+LAI_vrs_Open <- regen_data1N %>% 
+  select(x_site_open, lai_4_ring, lai_5_ring)
+
+ggplot(LAI_vrs_Open, aes(x_site_open, lai_4_ring))+
+   geom_point()+
+  theme_classic()+
+  labs(x= "%Openness", y= "LAI 4ring")
+
+ggplot(LAI_vrs_Open, aes(x_site_open, lai_5_ring))+
+  geom_point()+
+  theme_classic()+
+  labs(x= "%Openness", y= "LAI 5ring")
+```
+
+Lets see the relationship between distance to the edge_vrs_openness 
+```{r distance to the edge_vrs_openness}
+Dist_vrs_openness <- neardist %>% left_join(regen_data1N) %>% 
+  select(near_distance, x_site_open, gap_type)
+
+Dist_vrs_opennessS <- Dist_vrs_openness %>% 
+  filter(gap_type == "S")
+
+Dist_vrs_opennessN <- Dist_vrs_openness %>% 
+  filter(gap_type == "N")
+```
+Now lets plot the graphs
+```{r}
+ggplot(Dist_vrs_opennessS, aes(near_distance, x_site_open))+
+  geom_point() +
+  theme_classic() +
+  labs(title = "Salvage", x= "Distance to gap edge (cm)", y= "% Gap openness")
+
+ggplot(Dist_vrs_opennessN, aes(near_distance, x_site_open))+
+  geom_point() +
+  theme_classic() +
+  labs(title = "Natural", x= "Distance to gap edge (cm)", y= "% Gap openness")
+```
+
+Now lets transform the Azimuth 
+```{r Transformed Azimuth}
+Azimuth_trans <- neardist %>% 
+  mutate(azimuth_T = cos(rad(0-azimuth1))+1)
+view(Azimuth_trans)
+
+Azimuth_vrs_growthS <- Azimuth_trans %>% left_join(HsummaryS) %>% left_join(GsummaryS) %>% left_join(DsummaryS) %>% left_join(WsummaryS) %>% 
+  filter(count !="NA") 
+view(Azimuth_vrs_growthS) 
+
+Azimuth_vrs_growthN <- Azimuth_trans %>% left_join(HsummaryN) %>% left_join(GsummaryN) %>% left_join(DsummaryN) %>% left_join(WsummaryN) %>% 
+  filter(count !="NA") 
+view(Azimuth_vrs_growthN) 
+```
+
+Now lets plot relationships between transformed azimuth and growth var
+
+```{r Azimuth vrs height}
+ggplot(Azimuth_vrs_growthS, aes(azimuth_T, meanH)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salavge", x ="Azimuth", y= "Total height (cm)")
+
+ggplot(Azimuth_vrs_growthN, aes(azimuth_T, meanH)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="Azimuth", y= "Total height (cm)")
+```
+
+```{r Azimuth vrs growth}
+ggplot(Azimuth_vrs_growthS, aes(azimuth_T, meanG)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salavge", x ="Azimuth", y= "Heiught increment (cm)")
+
+ggplot(Azimuth_vrs_growthN, aes(azimuth_T, meanG)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="Azimuth", y= "Height increment (cm)")
+```
+
+```{r Azimuth vrs diameter}
+ggplot(Azimuth_vrs_growthS, aes(azimuth_T, meanD)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salavge", x ="Azimuth", y= "Diameter (cm)")
+
+ggplot(Azimuth_vrs_growthN, aes(azimuth_T, meanD)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="Azimuth", y= "Diameter (cm)")
+```
+
+```{r Azimuth vrs width}
+ggplot(Azimuth_vrs_growthS, aes(azimuth_T, meanW)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salavge", x ="Azimuth", y= "Crown width (cm)")
+
+ggplot(Azimuth_vrs_growthN, aes(azimuth_T, meanW)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="Azimuth", y= "Crown width (cm)")
+```
+
+Transformed azimuth vrs TPH 
+```{r}
+AziTPH_S <- regen_by_plot1 %>% left_join(Azimuth_trans) %>% left_join(regen_data1N) %>% 
+  filter(gap_type !="N")
+view(AziTPH_S)
+
+AziTPH_N <- regen_by_plot1 %>% left_join(Azimuth_trans) %>% left_join(regen_data1N) %>% 
+  filter(gap_type !="S")
+view(AziTPH_N)
+
+ggplot(AziTPH_S, aes(azimuth_T, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Salavge", x ="Azimuth", y= "Total trees per hectare")
+
+ggplot(AziTPH_N, aes(azimuth_T, tph)) +
+  geom_point()+
+  theme_classic()+
+  labs(title ="Natural", x ="Azimuth", y= "Total trees per hectare")
+```
+
+Now that we have data on the dem lets see what we can find
+```{r}
+Demdata <- read.csv("dem.csv") %>% 
+  clean_names() %>% 
+    separate(plot_id, c("gap","plot"))
+ colnames(Demdata)
+ summary(Demdata)
+```
+
+Lets transform the aspect for dem1m and plot it and slope with growth variables
+```{r}
+Demdata <- Demdata %>% 
+  mutate(aspect_dem11T = cos(rad(0-aspect_dem11))+1) %>% 
+  mutate(aspect_dem21T = cos(rad(0-aspect_dem21))+1) %>% 
+  mutate(aspect_dem51T = cos(rad(0-aspect_dem51))+1) %>% 
+  mutate(aspect_dem101T = cos(rad(0-aspect_dem101))+1)
+view(Demdata)
+```
+
+LAI vrs BA
+```{r}
+LAIvvrsBA_S <- regen_data1N %>% left_join(S_vrp_summarySplots) %>% 
+filter(gap_type != "N")
+
+LAIvvrsBA_N <- regen_data1N %>% left_join(N_vrp_summaryplots) %>% 
+filter(gap_type != "S")
+```
+
+Now lets plot
+```{r}
+ggplot(LAIvvrsBA_N, aes(total, lai_4_ring)) +
+geom_point()+
+  theme_classic()+
+  labs(title="Natural", x= "Basal area (m^2)", y="LAI")
+
+ggplot(LAIvvrsBA_S, aes(total, lai_4_ring)) +
+geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x= "Basal area (m^2)", y="LAI")
+```
+
+Obtaining regen that have zero plots 
+```{r}
+Regen_by_plotZero <- regen_by_plot1 %>% 
+  filter(count== 0)
+view(Regen_by_plotZero)
+```
+
+Load gapsize
+```{r Load gapsize}
+gapsize <- read.csv("gap_size.csv") %>% 
+mutate(gap =as.character(gap))
+summary(gapsize)
+```
+
+Checking gapsizes versus regeneration
+```{r}
+gapsize_regen <- regen_by_gap1 %>% left_join(gapsize)
+view(gapsize_regen)
+```
+
+Now lets plot the regen per gap size
+```{r}
+ggplot(gapsize_regen, aes(Gap_area, mean_density))+
+  geom_point()+
+  theme_classic()+
+  labs(x="Gap area (ha)", y ="Total trees per hectare")
+```
+
+Transformed aspects and regen and growth
+```{r}
+Demdata_vrs_regenS <- Demdata %>% left_join(regen_data1N) %>% left_join(regen_by_plot1) %>% left_join(HsummaryS) %>%  
+  filter(gap_type =="S")
+view(Demdata_vrs_regenS)
+
+Demdata_vrs_regenN <- Demdata %>% left_join(regen_data1N) %>% left_join(regen_by_plot1) %>% left_join(HsummaryN) %>% 
+  filter(gap_type =="N")
+view(Demdata_vrs_regenN)
+
+#Aspect_vrs_varS <- Demdata %>% left_join(regen_by_plot1) %>%  left_join(HsummaryS) %>% 
+  filter(meanH !="NA")
+view(Aspect_vrs_varS)
+
+Aspect_vrs_varN <- Demdata %>% left_join(regen_by_plot1) %>%  left_join(HsummaryN) %>% 
+  filter(meanH !="NA")
+view(Aspect_vrs_varN)
+```
+
+Now lets plot the aspects and slope from the dem with regen and height
+```{r Slope and aspect for regen and height salvage}
+ggplot(Aspect_vrs_varS, aes(aspect_dem11T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varS, aes(slope_dem_1m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varS, aes(aspect_dem21T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varS, aes(slope_dem2m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varS, aes(aspect_dem51T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varS, aes(slope_dem_5m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varS, aes(aspect_dem101T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varS, aes(slope_dem_10m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Slope", y ="Total trees per hectare")
+```
+
+Now for the natural 
+```{r Slope and aspect for regen and height natural}
+ggplot(Aspect_vrs_varN, aes(aspect_dem11T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varN, aes(slope_dem_1m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varN, aes(aspect_dem21T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varN, aes(slope_dem2m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varN, aes(aspect_dem51T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varN, aes(slope_dem_5m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Slope", y ="Total trees per hectare")
+
+ggplot(Aspect_vrs_varN, aes(aspect_dem101T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Aspect_vrs_varN, aes(slope_dem_10m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Slope", y ="Total trees per hectare")
+```
+
+Lets see the other TWI and other variables with tph and height
+```{r}
+ggplot(Demdata_vrs_regenS, aes(aspect_dem11T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Aspect", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(aspect_dem11T, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Aspect", y ="Total trees per hectare")
+  
+
+ggplot(Demdata_vrs_regenS, aes(slope_dem_1m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Slope", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(slope_dem_1m1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Slope", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(twi_1mfina, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(twi_1mfina, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(twi_2m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(twi_2m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(twi_5m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(twi_5m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(twi_10m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(twi_10m, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Topographic wetness index", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(dem1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Elevation (m)", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenN, aes(dem1, tph))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Elevation (m)", y ="Total trees per hectare")
+
+ggplot(Demdata_vrs_regenS, aes(twi_1mfina, meanH))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Salvage", x="Topographic wetness index", y ="Total height")
+
+ggplot(Demdata_vrs_regenN, aes(twi_1mfina, meanH))+
+  geom_point()+
+  theme_classic()+
+  labs(title="Natural", x="Topographic wetness index", y ="Total height")
+```
+
+Now lets put everything together for the NMDS 
+```{r}
+AlldataS <- regen_by_plot1 left_join(regen_data1N) %>% left_join(HsummaryS) %>% left_join(GsummaryS) %>%  left_join(DsummaryS) %>% left_join(WsummaryS) 
+```
+
+Now we find other plots 
+```{r}
+notfd <- regen_data %>% 
+  filter(spp !="Fd") %>% 
+   mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+                           vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+   mutate(spp = ifelse(nchar(spp) >=  1, "0" , spp)) %>% 
+  mutate(count = 0)%>%
+   distinct() %>% 
+  select(gap, plot, gap_type, count)
+view(notfd)
+
+Now lets find the different species in all the plots 
+```{r}
+notfd_or_0 <- bind_rows(zero_counts1, notfd) %>%
+  distinct()
+view(notfd_or_0)
+
+```
+```
