@@ -1,0 +1,539 @@
+---
+title: "Data_exploration"
+author: "Adam Polinko"
+date: "November 22, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the libraries
+
+```{r}
+library(tidyverse)
+library(openxlsx)
+```
+
+
+## Read the data
+
+Write a clean names function
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+  n <- if (is.data.frame(.data)) colnames(.data) else .data
+
+  n <- gsub("%+", "_pct_", n)
+  n <- gsub("\\$+", "_dollars_", n)
+  n <- gsub("\\++", "_plus_", n)
+  n <- gsub("-+", "_minus_", n)
+  n <- gsub("\\*+", "_star_", n)
+  n <- gsub("#+", "_cnt_", n)
+  n <- gsub("&+", "_and_", n)
+  n <- gsub("@+", "_at_", n)
+
+  n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+  n <- gsub("([A-Z][a-z])", "_\\1", n)
+  n <- tolower(trimws(n))
+  
+  n <- gsub("(^_+|_+$)", "", n)
+  
+  n <- gsub("_+", "_", n)
+  
+  if (unique) n <- make.unique(n, sep = "_")
+  
+  if (is.data.frame(.data)) {
+    colnames(.data) <- n
+    .data
+  } else {
+    n
+  }
+}
+```
+
+
+```{r}
+regen_data <- read_csv("regen_data.csv") %>% 
+  clean_names() %>% 
+  separate(gap_no, c("gap","plot"))
+```
+
+##Prep the data
+
+Pull out 0 plots
+
+```{r}
+zero_plots <- regen_data %>% 
+  filter(spp == "0")
+
+```
+
+
+Now find germinates
+```{r}
+regen_data <- regen_data %>% 
+  mutate(germ_id = ifelse(height == growth, "germinate", "older")) 
+
+
+germinate_id <- regen_data %>% 
+  filter(germ_id == "germinate")
+
+```
+
+Now we need to find plots with only germinates. First, I will create a dataframe with plots that have germinates.
+```{r}
+plots_with_germinates <- regen_data %>% filter(plot %in% germinate_id$plot)
+
+```
+
+Now find plots with older trees as well as germinates
+```{r}
+plots_with_germinates_older <- plots_with_germinates %>% filter(germ_id == "older")
+
+```
+
+and remove those plots from the plots with germinates dataframe
+```{r}
+plots_with_germinates_no_old <- plots_with_germinates %>% filter(!plot %in% plots_with_germinates_older$plot)
+```
+
+Now we have a dataframe with plots with only germinates. There are several At in the plots that have NA values. We won't worry about them for now.
+
+```{r}
+plots_with_germinates_no_old <- plots_with_germinates_no_old %>% 
+  mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+  mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+  select(-germ_id) %>% 
+  distinct()
+```
+
+
+Now combine the zero plots in
+```{r}
+zero_plots2<- bind_rows(zero_plots, plots_with_germinates_no_old)
+```
+
+Now let's find advanced regeneration
+```{r}
+advanced_regen <- regen_data %>% 
+  filter(regn_type != "N")
+
+advanced_regen2 <- regen_data %>% 
+  filter(plot %in% advanced_regen$plot)
+
+advanced_regen3 <- advanced_regen2 %>% 
+  filter(regn_type == "N")
+
+advanced_regen4 <- advanced_regen %>% 
+  filter(!plot %in% advanced_regen3$plot)
+
+advanced_regen_final <- advanced_regen4 %>% 
+    mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+  mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+  select(-germ_id) %>% 
+  distinct()
+
+```
+
+Now add this back in 
+```{r}
+zero_plots_final <- bind_rows(zero_plots2, advanced_regen_final)
+```
+
+So now we count douglas-fir
+```{r}
+regen_data_ready_count <- regen_data %>% 
+  filter(!plot %in% zero_plots_final$plot) %>% 
+  filter(spp == "Fd", regn_type == "N") %>% 
+  group_by(gap, plot) %>% 
+  summarise(count = n()) 
+
+
+```
+
+
+NOw we create a dataframe to merge into zeros
+```{r}
+zero_counts <- zero_plots_final %>% 
+  select(gap, plot) %>% 
+  mutate(count = 0)
+```
+
+
+bind the two dataframes
+```{r}
+regen_by_plot <- bind_rows(regen_data_ready_count, zero_counts)
+```
+
+
+add TPH
+```{r}
+regen_by_plot <- regen_by_plot %>% 
+  mutate(tph = count * 1000)
+```
+
+Now let's find density by gap
+```{r}
+regen_by_gap <- regen_by_plot %>% 
+  group_by(gap) %>% 
+  summarise(mean_density = mean(tph),
+            sem_density = sd(tph)/sqrt(n()))
+```
+
+Now to obtain scatter plots for the 4Ring and 5Ring LAI we must upload the PASG data 
+
+First we have to clean names 
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+  n <- if (is.data.frame(.data)) colnames(.data) else .data
+
+  n <- gsub("%+", "_pct_", n)
+  n <- gsub("\\$+", "_dollars_", n)
+  n <- gsub("\\++", "_plus_", n)
+  n <- gsub("-+", "_minus_", n)
+  n <- gsub("\\*+", "_star_", n)
+  n <- gsub("#+", "_cnt_", n)
+  n <- gsub("&+", "_and_", n)
+  n <- gsub("@+", "_at_", n)
+
+  n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+  n <- gsub("([A-Z][a-z])", "_\\1", n)
+  n <- tolower(trimws(n))
+  
+  n <- gsub("(^_+|_+$)", "", n)
+  
+  n <- gsub("_+", "_", n)
+  
+  if (unique) n <- make.unique(n, sep = "_")
+  
+  if (is.data.frame(.data)) {
+    colnames(.data) <- n
+    .data
+  } else {
+    n
+  }
+}
+```
+
+Loading regen_data1 with names cleaned and gap and plot numbers seperated
+```{r}
+regen_data1N <- read.csv('regen_data1.csv') %>% 
+ clean_names() %>% 
+  separate(gap_no, c("gap","plot")) 
+colnames(regen_data1N)
+```
+
+Now we obtain informatiion on the LAI  
+```{r}
+regen_LAI <- regen_data1N%>%
+  group_by(gap, plot, gap_type) %>% 
+  select(lai_4_ring,lai_5_ring)
+view(regen_LAI)
+```
+
+Now we get the LAI 4&5 for salavage plots
+```{r}
+regen_LAIS <- regen_LAI %>%
+  filter(gap_type =="S")
+```
+
+Now we get the LAI 4&5 for natural plots
+```{r}
+regen_LAIN <- regen_LAI %>%
+  filter(gap_type =="N")
+```
+
+NOw we join regen plot data and LAIS (salvage) data
+
+```{r}
+S_regen_LAI <- regen_by_plot %>% left_join(regen_LAIS) %>% 
+  filter (gap_type =="S")
+
+```
+
+Now we obtain regen plot data and LAIN (natuaral) data
+
+```{r}
+N_regen_LAI <-  regen_by_plot %>% left_join(regen_LAIN) %>% 
+  filter(gap_type =="N")
+
+```
+
+Now we plot scatter plots for both LAI Salavage
+
+```{r}
+SScplot_LAI4R <- plot(lai_4_ring ~ tph, data = S_regen_LAI)
+SScplot_LAI4R1 <- plot (tph ~ lai_4_ring, data = S_regen_LAI) 
+SScplot_LAI5R <- plot (lai_5_ring ~ tph, data = S_regen_LAI)
+```
+
+Now we plot scatter plots for both LAI Natural
+
+```{r}
+NScplot_4LAI <- plot(lai_4_ring ~tph, data= N_regen_LAI)
+NScplot_5LAI <- plot(lai_5_ring ~tph, data= N_regen_LAI)
+```
+
+Lets fix the germinants by taking them out
+```{r}
+Zeroplots_germinants <- plots_with_germinates %>% 
+   filter(height == growth) %>% 
+   mutate_at(.vars = vars( height, growth, diameter, width, damage, 
+                           vigour), ~replace(., nchar(.) >= 1, NA)) %>% 
+   mutate(spp = ifelse(nchar(spp) >= 1, "0" , spp)) %>% 
+   select(-germ_id) %>% 
+   distinct() %>% 
+  mutate(count = 0)
+```
+ 
+ #Now lets add this back in 
+ 
+```{r}
+zero_plots_final1 <- bind_rows(zero_plots_final, Zeroplots_germinants)
+```
+
+Lets make a new count for the DF
+ 
+```{r}
+ regen_data_ready_count1 <- regen_data %>% 
+   filter(!plot %in% zero_plots_final1$plot) %>% 
+   filter(spp == "Fd", regn_type == "N") %>% 
+   group_by(gap, plot) %>% 
+   summarise(count = n()) 
+```
+ 
+Now we create a new data frame to merge the zero_plots
+
+```{r}
+ zero_counts1 <- zero_plots_final1 %>% 
+    select(gap, plot) %>% 
+    mutate(count = 0)
+```
+ 
+Now I will bind the 2 data frames 
+
+```{r}
+regen_by_plot1 <- bind_rows(regen_data_ready_count1, zero_counts1) %>% 
+    distinct() 
+```
+ 
+Now I will convert to total per hectare
+```{r}
+regen_by_plot1 <- regen_by_plot1 %>% 
+    mutate(tph = count * 1000) 
+```
+
+Now I will find density per gap
+```{r}
+regen_by_gap1 <- regen_by_plot1 %>% 
+    group_by(gap) %>% 
+    summarise(tphg = sum(tph), mean_density = mean(tph), sem_density = sd(tph)/sqrt(n()))
+```
+ 
+Now that it seems we have the right data, lets proceed to plot the scatter plots.
+Since we already have the data on the LAI 4&5 for both S and N plots, we will proceed to join them to the new data we have.
+ 
+For salvage LAI and plots
+```{r}
+
+ S_regen_LAI1 <- regen_by_plot1 %>% left_join(regen_LAIS) %>% 
+    filter (gap_type =="S")
+```
+
+For natural LAI and plots
+```{r}
+N_regen_LAI1 <-  regen_by_plot1 %>% left_join(regen_LAIN) %>% 
+    filter(gap_type =="N")
+```
+ 
+Now we plot scatter plots for both LAI Salavage
+```{r}
+SScplot_LAI4R1 <- plot(lai_4_ring ~ tph, data = S_regen_LAI1)
+SScplot_LAI5R1 <- plot (lai_5_ring ~ tph, data = S_regen_LAI1)
+```
+
+ 
+ 
+ #Now that we have the salavage LAI's lets plot that of the natural.
+ NScplot_4LAI1 <- plot(lai_4_ring ~tph, data= N_regen_LAI1)
+ NScplot_5LAI1 <- plot(lai_5_ring ~tph, data= N_regen_LAI1)
+
+#We have the scatter plots now. Before we continue let load the VRP data and find the summary on the species. First we clean names
+```{r}
+clean_names <- function(.data, unique = FALSE) {
+    n <- if (is.data.frame(.data)) colnames(.data) else .data
+    
+    n <- gsub("%+", "_pct_", n)
+    n <- gsub("\\$+", "_dollars_", n)
+    n <- gsub("\\++", "_plus_", n)
+    n <- gsub("-+", "_minus_", n)
+    n <- gsub("\\*+", "_star_", n)
+    n <- gsub("#+", "_cnt_", n)
+    n <- gsub("&+", "_and_", n)
+    n <- gsub("@+", "_at_", n)
+    
+    n <- gsub("[^a-zA-Z0-9_]+", "_", n)
+    n <- gsub("([A-Z][a-z])", "_\\1", n)
+    n <- tolower(trimws(n))
+    
+    n <- gsub("(^_+|_+$)", "", n)
+    
+    n <- gsub("_+", "_", n)
+    
+    if (unique) n <- make.unique(n, sep = "_")
+    
+    if (is.data.frame(.data)) {
+       colnames(.data) <- n
+       .data
+    } else {
+       n
+    }
+ }
+
+```
+
+Then we load the data VRP data
+```{r}
+regen_data2 <- read.csv('regen_data2.csv') %>% 
+    clean_names() %>% 
+    separate(gap_no, c("gap","plot")) 
+ colnames(regen_data2)
+```
+
+To obtain the sum and mean of species  for both gap type we have: 
+```{r}
+S_vrp_summaryplots <- regen_data2 %>%
+  group_by(gap, plot, spp, vrp_baf3) %>% 
+  filter(gap_type =='S')%>%
+  mutate(tph = ifelse(vrp_baf3 ==0, 0, n *1000))
+  
+```
+
+For the Salvage gap
+```{r}
+S_vrp_summarygap <- S_vrp_summaryplots %>% 
+  group_by(gap, spp) %>% 
+  summarise(tphn = sum(tph), sumn =sum(n), mean_tph = mean(tph),sem_tph =sd(tph)/sqrt(n()))
+```
+
+
+Now we do the same for the natural gap
+
+```{r}
+N_vrp_summaryplots <- regen_data2 %>% 
+  group_by(gap, plot, spp, vrp_baf3) %>% 
+  filter(gap_type == 'N') %>% 
+  mutate(tph = ifelse(vrp_baf3 ==0,0, n*1000))
+```
+
+ For the natural gap
+```{r}
+N_vrp_summarygap <- N_vrp_summaryplots %>% 
+  group_by(gap, spp) %>% 
+  summarise(tphn = sum(tph), sumn =sum(n), mean_tph = mean(tph),sem_tph =sd(tph)/sqrt(n()))
+```
+
+Ploting bargraphs for VRP 
+```{r}
+  
+ 
+```
+Since I couldnt plot bar graphs for the VRP data. Lets continue. 
+Lets work on the other light indices  and other growth parameters (height and height growth). 
+
+```{r}
+regen_data_ready_count2 <- regen_data %>% 
+   filter(!plot %in% zero_plots_final1$plot) %>% 
+   filter(spp == "Fd", regn_type == "N") %>% 
+   group_by(gap, plot)   %>% 
+   summarise(count = n()) 
+  
+```
+
+We need the zeros in the data 
+```{r}
+zero_counts2 <- zero_plots_final1 %>% 
+    mutate(count = 0)
+```
+
+Merging the 2 dataframes to obtain data on the growth parameters.
+ 
+```{r}
+regen_by_plot2 <- bind_rows(regen_data_ready_count2, zero_counts2) %>% 
+    distinct()
+```
+
+Now that we have the growth parameters and the zeros lets work on the gap types first.
+Salvage
+
+```{r}
+regen_by_plot2S <- regen_by_plot2 %>% 
+  filter(gap_type =="S") %>% 
+  distinct()
+```
+
+Natural
+
+```{r}
+regen_by_plot2N <- regen_by_plot2 %>% 
+  filter(gap_type=="N") %>% 
+  distinct()
+```
+
+First lets deal with the mortaltity for Salvage per gap
+
+```{r}
+mortS <- regen_by_plot2S%>% 
+select(gap, plot, spp, status) %>% 
+  filter(spp=="Fd") %>% 
+  mutate(new_status= ifelse(status=="0", 0, status * 1))
+
+mortzero <- mortS %>% 
+  filter(spp==0) %>% 
+  mutate(new_status = ifelse(spp == "0", NA, status * NA)) 
+
+mortSnew <- bind_rows(mortS, mortzero)%>%
+  distinct() %>% 
+
+morrtSnewG <- mortSnew %>% 
+group_by(gap,new_status) %>%
+summarise(count= n()) %>% 
+  filter(new_status=="0") %>% 
+  mutate(tph = count * 1000) 
+```
+
+Now mortatlity for Natural per gap
+
+```{r}
+mortN <- regen_by_plot2N%>% 
+select(gap, plot, spp, status) %>% 
+  filter(spp=="Fd") %>% 
+  mutate(new_status= ifelse(status=="0", 0, status * 1))
+
+mortzeroN <- mortN %>% 
+  filter(spp==0) %>% 
+  mutate(new_status = ifelse(spp == "0", NA, status * NA)) 
+
+mortNnew <- bind_rows(mortN, mortzeroN)%>%
+  distinct()
+
+mortNnewG <- mortNnew %>% 
+group_by(gap,new_status) %>%
+summarise(count= n()) %>% 
+  filter(new_status=="0") %>% 
+  mutate(tph = count * 1000) 
+```
+
+ Now that we have the mortality, lets move on to the height, growth, dameter and crown
+ 
+```{r}
+HGDC_summaryS <- regen_by_plot2S %>%
+  filter(regn_type =="N") %>% 
+  select(gap, plot, height, growth, diameter, width) %>% 
+  
+```
+ 
+ 
